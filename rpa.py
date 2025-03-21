@@ -43,6 +43,11 @@ def load_config():
     password_gls = os.getenv('PASSWORD_GLS')
     download_folder = os.getenv('PATH_DOWNLOAD_FOLDER')
     final_folder = os.getenv('PATH_FINAL_FOLDER')
+    host_db = os.getenv('HOST_DB')
+    port_db = os.getenv('PORT_DB')
+    database_db = os.getenv('DATABASE_DB')
+    user_db = os.getenv('USER_DB')
+    password_db = os.getenv('PASSWORD_DB')
 
 
     CONFIG = {
@@ -66,6 +71,14 @@ def load_config():
             "headless": False,
             "disable_images" : True,
             "chromedriver_path" : "drivers/chromedriver.exe"
+        },
+        "database":{
+            "host": host_db,
+            "port":port_db,
+            "database_name": database_db,
+            "user": user_db,
+            "password": password_db,
+
         }
     }
     return CONFIG
@@ -375,7 +388,7 @@ def export_to_excel(driver, config):
         return None
 
 def process_excel_file(excel_file_path, config):
-    """Procesa el archivo descargado y lo convierte a CSV."""
+    """Procesa el archivo descargado y lo convierte a XLSX."""
     try:
         if not excel_file_path or not os.path.exists(excel_file_path):
             logger.error(f"No se puede procesar un archivo que no existe: {excel_file_path}")
@@ -513,6 +526,90 @@ def process_excel_file(excel_file_path, config):
         logger.error(f"Error al procesar el archivo: {e}")
         return False
 
+def conection_db(config):
+    import sqlalchemy
+    import urllib.parse
+    """ Personal connection string """
+    try:
+        
+        pass_encoded = urllib.parse.quote_plus(config["database"]["password"])
+        engine = sqlalchemy.create_engine("mysql+pymysql://" 
+                                        + config["database"]["user"] 
+                                        + ":" 
+                                        + pass_encoded 
+                                        + "@" 
+                                        + config["database"]["host"]
+                                        + ":"
+                                        + config["database"]["port"]  
+                                        + "/" 
+                                        + config["database"]["database_name"],
+                                        pool_size=0,
+                                        max_overflow=-1)
+
+
+        return engine
+
+    except Exception as c:
+        print(c)
+
+def get_data_ps(config):
+    import pandas as pd
+    c = conection_db(config)
+
+    df_orders_ps = pd.read_sql("""select marketplace_order_id, o.id_order as id_order_ps, reference as reference_ps 
+        from ps_orders o
+            inner join (
+                select id_order, marketplace_order_id  
+                from toolstock_ps.ps_beezup_order
+            ) bo
+            on bo.id_order = o.id_order
+        where current_state in (1, 2, 3, 6, 10, 11, 14, 15, 16, 21)""", c)
+    
+    return df_orders_ps
+
+def updated_excel(config):
+    import pandas as pd
+    try:
+        path_file = os.path.join(config["paths"]["final_folder"], f"{get_date_for_filename()}.xlsx")
+
+        # Cargar el archivo Excel original
+        df_excel = pd.read_excel(path_file)
+        
+        # Cargar el dataframe de referencia
+        df_referencia = get_data_ps(config)
+        
+        # Crear las nuevas columnas con valores vacíos
+        df_excel['id_order_ps'] = ''
+        df_excel['reference_ps'] = ''
+        
+        # Iterar sobre las filas del Excel original
+        for index, fila in df_excel.iterrows():
+            valor_dpto_dst = fila['DptoDst']
+            
+            # Buscar coincidencia en el dataframe de referencia
+            coincidencia_marketplace = df_referencia[df_referencia['marketplace_order_id'] == valor_dpto_dst]
+            coincidencia_reference = df_referencia[df_referencia['reference_ps'] == valor_dpto_dst]
+            
+            # Si hay coincidencia con marketplace_order_id
+            if not coincidencia_marketplace.empty:
+                df_excel.at[index, 'id_order_ps'] = coincidencia_marketplace['id_order_ps'].values[0]
+                df_excel.at[index, 'reference_ps'] = coincidencia_marketplace['reference_ps'].values[0]
+            
+            # Si hay coincidencia con reference_ps
+            elif not coincidencia_reference.empty:
+                df_excel.at[index, 'id_order_ps'] = coincidencia_reference['id_order_ps'].values[0]
+                df_excel.at[index, 'reference_ps'] = coincidencia_reference['reference_ps'].values[0]
+        
+        # Guardar los cambios al archivo Excel
+        df_excel.to_excel(path_file, index=False)
+        print(f"El archivo '{path_file}' ha sido actualizado con éxito.")
+
+        return True
+    
+    except Exception as e:
+        logger.error(f"Error al actualizar el archivo Excel: {e}")
+        return False
+
 def rpa_shipments():
     """Función principal que ejecuta el flujo completo de RPA para envíos GLS."""
     driver = None
@@ -540,17 +637,20 @@ def rpa_shipments():
         # Exportar resultados a Excel
         excel_file_path = export_to_excel(driver, config)
         
-        # Si hay archivo para procesar, lo convertimos a CSV
+        # Si hay archivo para procesar, lo convertimos a XLSX
         if excel_file_path:
             result = process_excel_file(excel_file_path, config)
             
-            # Opcional: eliminar el archivo Excel original después de procesar
             if result and os.path.exists(excel_file_path):
-                try:
-                    os.remove(excel_file_path)
-                    logger.info(f"Archivo original eliminado: {excel_file_path}")
-                except:
-                    logger.warning(f"No se pudo eliminar el archivo original: {excel_file_path}")
+
+                # Opcional: eliminar el archivo Excel original después de procesar
+                updated_file = updated_excel(config)
+                if updated_file and os.path.exists(excel_file_path):
+                    try:
+                        os.remove(excel_file_path)
+                        logger.info(f"Archivo original eliminado: {excel_file_path}")
+                    except:
+                        logger.warning(f"No se pudo eliminar el archivo original: {excel_file_path}")
             
             return result
         else:

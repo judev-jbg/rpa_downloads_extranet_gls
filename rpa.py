@@ -5,7 +5,7 @@ y descargar informes de envíos.
 """
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from dotenv import load_dotenv
 from selenium import webdriver
@@ -48,6 +48,7 @@ def load_config():
     database_db = os.getenv('DATABASE_DB')
     user_db = os.getenv('USER_DB')
     password_db = os.getenv('PASSWORD_DB')
+    days_ago = os.getenv('DAYS_AGO')
 
 
     CONFIG = {
@@ -78,18 +79,21 @@ def load_config():
             "database_name": database_db,
             "user": user_db,
             "password": password_db,
-
-        }
+        },
+        "time_ago": days_ago
     }
     return CONFIG
 
-def get_current_date_formatted():
+def get_current_date_formatted(config):
     """Devuelve la fecha actual en formato dd/mm/yyyy."""
-    return datetime.now().strftime("%d/%m/%Y")
+    return (datetime.now() - timedelta(days=config["time_ago"])).strftime("%d/%m/%Y")
+     
 
-def get_date_for_filename():
+def get_date_for_filename(config):
     """Devuelve la fecha actual en formato YYYYMMDD para nombre de archivo."""
-    return datetime.now().strftime("%Y%m%d")
+    return (datetime.now() - timedelta(days=config["time_ago"])).strftime("%Y%m%d")
+
+     
 
 def setup_selenium_driver(config):
     """Configura y devuelve un WebDriver de Selenium para Chrome."""
@@ -242,7 +246,7 @@ def search_shipments(driver, config):
     """Realiza la búsqueda de envíos para la fecha actual."""
     try:
         logger.info("Realizando búsqueda de envíos")
-        current_date = get_current_date_formatted()
+        current_date = get_current_date_formatted(config)
         
         # Localizar e ingresar fechas
         from_date_field = driver.find_element(By.ID, "fechadesde")
@@ -290,7 +294,7 @@ def export_to_excel(driver, config):
             )
             
             # Generamos el nombre del archivo estandarizado que usaremos
-            date_str = get_date_for_filename()
+            date_str = get_date_for_filename(config)
             standardized_filename = f"GLS_{date_str}.xls"
             final_path = os.path.join(config["paths"]["download_folder"], standardized_filename)
             
@@ -395,7 +399,7 @@ def process_excel_file(excel_file_path, config):
             return False
             
         logger.info(f"Procesando archivo descargado: {excel_file_path}")
-        date_str = get_date_for_filename()
+        date_str = get_date_for_filename(config)
         
         # Nombre del archivo destino
         final_path = os.path.join(config["paths"]["final_folder"], f"{date_str}.xlsx")
@@ -556,9 +560,13 @@ def get_data_ps(config):
     import pandas as pd
     c = conection_db(config)
 
-    df_orders_ps = pd.read_sql("""select marketplace_order_id, o.id_order as id_order_ps, reference as reference_ps 
+    df_orders_ps = pd.read_sql("""select 
+            CASE WHEN marketplace_order_id IS NULL THEN reference 
+            ELSE marketplace_order_id 
+            END AS marketplace_order_id, 
+        o.id_order as id_order_ps, reference as reference_ps 
         from ps_orders o
-            inner join (
+            left join (
                 select id_order, marketplace_order_id  
                 from toolstock_ps.ps_beezup_order
             ) bo

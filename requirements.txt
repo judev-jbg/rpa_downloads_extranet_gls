@@ -7,3 +7,4 @@ beautifulsoup4==4.12.2
 html5lib==1.1
 lxml==4.9.3
 python-dotenv==1.0.1
+sqlalchemy>=1.4.0
